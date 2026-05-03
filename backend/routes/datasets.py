@@ -11,26 +11,6 @@ from backend.schemas.api_schemas import DatasetOut
 
 router = APIRouter(prefix="/datasets", tags=["Datasets"])
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-@router.post("/upload", response_model=DatasetOut)
-async def upload_dataset(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Only CSV files are allowed.")
-    
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
-    
-    # Save file locally (DUMMY: overwrites if exists)
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    new_dataset = Dataset(name=file.filename, file_path=file_path)
-    db.add(new_dataset)
-    await db.commit()
-    await db.refresh(new_dataset)
-    
-    return new_dataset
 
 @router.get("/", response_model=List[DatasetOut])
 async def list_datasets(db: AsyncSession = Depends(get_db)):
@@ -53,7 +33,7 @@ async def delete_dataset(dataset_id: int, db: AsyncSession = Depends(get_db)):
     return {"message": "Dataset deleted successfully"}
 
 @router.post("/upload-dataset/")
-async def upload_dataset_file(file: UploadFile = File(...)):
+async def upload_dataset_file(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
     if not (file.filename.endswith('.csv') or file.filename.endswith('.txt')):
         raise HTTPException(status_code=400, detail="Unsupported format. Only .csv and .txt are allowed.")
     
@@ -65,6 +45,12 @@ async def upload_dataset_file(file: UploadFile = File(...)):
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        return {"file_path": file_path}
+            
+        new_dataset = Dataset(name=file.filename, file_path=file_path)
+        db.add(new_dataset)
+        await db.commit()
+        await db.refresh(new_dataset)
+        
+        return {"file_path": file_path, "dataset_id": new_dataset.id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
