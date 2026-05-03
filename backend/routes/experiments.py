@@ -17,6 +17,7 @@ router = APIRouter(prefix="/experiments", tags=["Experiments"])
 class ExperimentInput(BaseModel):
     file_path: str
     use_enhanced: bool
+    k: int = 3
 
 class ExperimentResponse(BaseModel):
     run_id: str
@@ -28,6 +29,9 @@ class ExperimentResultOut(BaseModel):
     silhouette_score: float
     davies_bouldin_score: float
     num_outliers: Optional[int] = None
+    variance: float
+    iterations: int
+    history: list = []
 
 @router.post("/run", response_model=ExperimentResponse)
 async def run_experiment_endpoint(payload: ExperimentInput, db: AsyncSession = Depends(get_db)):
@@ -46,12 +50,12 @@ async def run_experiment_endpoint(payload: ExperimentInput, db: AsyncSession = D
         await db.refresh(dataset)
         
     try:
-        result_dict = await asyncio.to_thread(run_experiment, payload.file_path, payload.use_enhanced)
+        result_dict = await asyncio.to_thread(run_experiment, payload.file_path, payload.use_enhanced, payload.k)
         
         new_run = ExperimentRun(
             dataset_id=dataset.id,
             algorithm_type=result_dict["algorithm"],
-            parameters={"use_enhanced": payload.use_enhanced}
+            parameters={"use_enhanced": payload.use_enhanced, "k": payload.k}
         )
         db.add(new_run)
         await db.commit()
@@ -61,11 +65,14 @@ async def run_experiment_endpoint(payload: ExperimentInput, db: AsyncSession = D
         
         new_result = Result(
             run_id=new_run.id,
-            metrics={
-                "silhouette_score": result_dict["silhouette_score"],
-                "davies_bouldin_score": result_dict["davies_bouldin_score"]
-            },
-            outliers=outliers_data
+            metrics={"legacy": True}, # Kept for schema backwards compatibility
+            outliers={"legacy": True},
+            silhouette_score=result_dict.get("silhouette_score"),
+            davies_bouldin_score=result_dict.get("davies_bouldin_score"),
+            num_outliers=result_dict.get("num_outliers"),
+            variance=result_dict.get("variance"),
+            iterations=result_dict.get("iterations"),
+            history=result_dict.get("history")
         )
         db.add(new_result)
         await db.commit()
@@ -99,7 +106,10 @@ async def get_experiment_result(run_id: str, db: AsyncSession = Depends(get_db))
     return {
         "run_id": str(run.id),
         "algorithm": run.algorithm_type,
-        "silhouette_score": res.metrics.get("silhouette_score", 0.0),
-        "davies_bouldin_score": res.metrics.get("davies_bouldin_score", 0.0),
-        "num_outliers": num_outliers
+        "silhouette_score": res.silhouette_score if res.silhouette_score is not None else 0.0,
+        "davies_bouldin_score": res.davies_bouldin_score if res.davies_bouldin_score is not None else 0.0,
+        "num_outliers": res.num_outliers if res.num_outliers is not None else 0,
+        "variance": res.variance if res.variance is not None else 0.0,
+        "iterations": res.iterations if res.iterations is not None else 1,
+        "history": res.history if res.history is not None else []
     }
